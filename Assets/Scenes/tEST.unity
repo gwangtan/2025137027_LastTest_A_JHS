@@ -500,6 +500,16 @@ PrefabInstance:
       propertyPath: m_Name
       value: vACTERIA
       objectReference: {fileID: 0}
+    - target: {fileID: 8802837856596389082, guid: e56e0a66108a8654ca5f6338e6a70df6,
+        type: 3}
+      propertyPath: m_LocalPosition.x
+      value: -0.43
+      objectReference: {fileID: 0}
+    - target: {fileID: 8802837856596389082, guid: e56e0a66108a8654ca5f6338e6a70df6,
+        type: 3}
+      propertyPath: m_LocalPosition.y
+      value: 5.21
+      objectReference: {fileID: 0}
     m_RemovedComponents: []
     m_RemovedGameObjects: []
     m_AddedGameObjects: []
