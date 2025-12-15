@@ -1,72 +1,69 @@
 using UnityEngine;
 
-public class PlayerMovement : MonoBehaviour
+public class PlayerController : MonoBehaviour
 {
-    // ====== Inspector에서 설정 가능한 변수 ======
-    [Header("Movement Settings")]
-    public float moveSpeed = 5.0f;
-    public float rotationSpeed = 500f; // Slerp에 사용될 회전 속도 (선택 사항)
+    public float moveSpeed = 5f;
+    public float jumpPower = 5f;
+    public float gravity = -9.81f;
+    public float mouseSensitivity = 3f;
 
-    [Header("Gravity and Jump")]
-    public float gravity = 9.81f;
-    public float jumpHeight = 1.0f;
+    float xRotation = 0f;
+    CharacterController controller;
+    Transform cam;
+    Vector3 velocity;
+    bool isGrounded;
 
-    [Header("Camera Reference")]
-    // Camera Holder (CameraRotation 스크립트가 부착된 오브젝트)의 Transform
-    public Transform cameraHolder;
-
-    // ====== 컴포넌트 참조 ======
-    private CharacterController controller;
-    private Vector3 moveDirection;
-
-    private void Start()
+    void Awake()
     {
         controller = GetComponent<CharacterController>();
+        if (cam == null)
+        {
+            cam = GetComponentInChildren<Camera>()?.transform;
+        }
     }
 
-    private void Update()
+    void Update()
     {
-        if (cameraHolder == null) return; // 카메라 참조가 없으면 작동 중지
+        HandleMove();
+        HandleLook();
+    }
 
-        // 1. 입력 처리
-        float horizontalInput = Input.GetAxis("Horizontal");
-        float verticalInput = Input.GetAxis("Vertical");
-        Vector3 inputVector = new Vector3(horizontalInput, 0, verticalInput).normalized;
-
-        // 2. 지면에 닿아 있는지 확인 및 중력 적용
-        if (controller.isGrounded)
+    void HandleMove()
+    {
+        isGrounded = controller.isGrounded;
+        if (isGrounded && velocity.y < 0)
         {
-            // A. 이동 방향 계산 (카메라 방향 기준)
-            Vector3 forward = cameraHolder.forward;
-            Vector3 right = cameraHolder.right;
-
-            // Y축 회전만 사용하기 위해 Y축을 0으로 고정 후 정규화
-            forward.y = 0;
-            right.y = 0;
-            forward.Normalize();
-            right.Normalize();
-
-            // 최종 이동 방향: 카메라 방향을 기준으로 입력 벡터를 변환
-            Vector3 desiredMove = forward * verticalInput + right * horizontalInput;
-
-            // 이동 속도 적용
-            moveDirection = desiredMove * moveSpeed;
-
-            // 점프 로직
-            if (Input.GetButtonDown("Jump"))
-            {
-                moveDirection.y = Mathf.Sqrt(2 * jumpHeight * gravity);
-            }
-        }
-        else
-        {
-            // 공중에 있을 때 중력 적용
-            moveDirection.y -= gravity * Time.deltaTime;
+            velocity.y = -2f;
         }
 
-        // 3. CharacterController를 이용한 이동 실행
-        controller.Move(moveDirection * Time.deltaTime);
+        float h = Input.GetAxis("Horizontal");
+        float v = Input.GetAxis("Vertical");
 
-        // 4. 회전 로직 (제거됨): 플레이어의 Y축 회전은 마우스 입력만으로 CameraRotation 스크립트에서 담당합니다.
+        Vector3 move = transform.right * h + transform.forward * v;
+        controller.Move(move * moveSpeed * Time.deltaTime);
+
+        if (Input.GetButtonDown("Jump") && isGrounded)
+        {
+            velocity.y = Mathf.Sqrt(jumpPower * -2f * gravity);
+        }
+
+        velocity.y += gravity * Time.deltaTime;
+        controller.Move(velocity * Time.deltaTime);
+    }
+
+    void HandleLook()
+    {
+        float mouseX = Input.GetAxis("Mouse X") * mouseSensitivity;
+        float mouseY = Input.GetAxis("Mouse Y") * mouseSensitivity;
+
+        transform.Rotate(Vector3.up * mouseX);
+
+        xRotation -= mouseY;
+        xRotation = Mathf.Clamp(xRotation, -80f, 80f);
+
+        if (cam != null)
+        {
+            cam.localRotation = Quaternion.Euler(xRotation, 0f, 0f);
+        }
     }
 }
