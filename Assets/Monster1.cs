@@ -1,16 +1,12 @@
-using UnityEngine;
+ï»¿using UnityEngine;
 
 public class MonsterAI1 : MonoBehaviour
 {
-    // --- ¸ó½ºÅÍ »óÅÂ Á¤ÀÇ ---
-    private enum MonsterState
-    {
-        Walk,
-        Run
-    }
+    // --- ëª¬ìŠ¤í„° ìƒíƒœ ì •ì˜ ---
+    private enum MonsterState { Walk, Run }
     private MonsterState currentState = MonsterState.Walk;
 
-    // --- ±âº» ¼³Á¤ º¯¼ö (Inspector¿¡¼­ ¼³Á¤) ---
+    // --- ê¸°ë³¸ ì„¤ì • ë³€ìˆ˜ ---
     [Header("Movement Settings")]
     public float walkSpeed = 2f;
     public float runSpeed = 5f;
@@ -24,14 +20,18 @@ public class MonsterAI1 : MonoBehaviour
 
     public LayerMask obstacleLayer;
 
-    // --- ³»ºÎ °ü¸® º¯¼ö ---
+    // --- ë‚´ë¶€ ê´€ë¦¬ ë³€ìˆ˜ ---
     private Transform playerTarget;
+    private PlayerController playerController;
     private Vector3 currentRandomDirection;
     private float detectionTimer;
     private float randomMoveTimer;
     private Animator animator;
     private CharacterController characterController;
     private Vector3 moveDirection = Vector3.zero;
+
+    // â˜…â˜…â˜… AI ì¼ì‹œ ì •ì§€ ìƒíƒœ (ê²Œì„ ì˜¤ë²„ ì‹œ ì›€ì§ì„ ë°©ì§€) â˜…â˜…â˜…
+    private bool isAIPaused = false;
 
     private const string PLAYER_TAG = "Player";
     private const string ANIM_WALK = "Walk";
@@ -42,7 +42,7 @@ public class MonsterAI1 : MonoBehaviour
         characterController = GetComponent<CharacterController>();
         if (characterController == null)
         {
-            Debug.LogError("CharacterController ÄÄÆ÷³ÍÆ®°¡ ÇÊ¿äÇÕ´Ï´Ù!");
+            Debug.LogError("CharacterController ì»´í¬ë„ŒíŠ¸ê°€ í•„ìš”í•©ë‹ˆë‹¤!");
             enabled = false;
             return;
         }
@@ -51,27 +51,52 @@ public class MonsterAI1 : MonoBehaviour
         if (playerObj != null)
         {
             playerTarget = playerObj.transform;
+            playerController = playerObj.GetComponent<PlayerController>();
+            if (playerController == null)
+            {
+                Debug.LogError("Player ì˜¤ë¸Œì íŠ¸ì— PlayerController ì»´í¬ë„ŒíŠ¸ê°€ ì—†ìŠµë‹ˆë‹¤!");
+            }
         }
         else
         {
-            Debug.LogError("Player Tag¸¦ °¡Áø ¿ÀºêÁ§Æ®¸¦ ¾À¿¡¼­ Ã£À» ¼ö ¾ø½À´Ï´Ù. ÇÃ·¹ÀÌ¾î ÅÂ±×¸¦ È®ÀÎÇÏ¼¼¿ä.");
+            Debug.LogError("Player Tagë¥¼ ê°€ì§„ ì˜¤ë¸Œì íŠ¸ë¥¼ ì”¬ì—ì„œ ì°¾ì„ ìˆ˜ ì—†ìŠµë‹ˆë‹¤.");
         }
 
-        // ¡Ú¡Ú¡Ú ÀÚ½Ä ¿ÀºêÁ§Æ®¿¡¼­ Animator Ã£±â (°­Á¶) ¡Ú¡Ú¡Ú
         animator = GetComponentInChildren<Animator>();
         if (animator == null)
         {
-            Debug.LogError("[FATAL ERROR] Animator ÄÄÆ÷³ÍÆ®°¡ ÀÌ ¿ÀºêÁ§Æ® ¶Ç´Â ÀÚ½Ä ¿ÀºêÁ§Æ®¿¡ ¾ø½À´Ï´Ù!");
+            Debug.LogError("[FATAL ERROR] Animator ì»´í¬ë„ŒíŠ¸ê°€ ì´ ì˜¤ë¸Œì íŠ¸ ë˜ëŠ” ìì‹ ì˜¤ë¸Œì íŠ¸ì— ì—†ìŠµë‹ˆë‹¤!");
         }
-        // ¡Ú¡Ú¡Ú ------------------------------------ ¡Ú¡Ú¡Ú
+
+        ResetMonsterState();
+    }
+
+    // ì”¬ ë¡œë“œ í›„ í•­ìƒ ì´ˆê¸° ìƒíƒœë¥¼ ë³´ì¥í•˜ëŠ” í•¨ìˆ˜
+    private void ResetMonsterState()
+    {
+        detectionTimer = 0f;
+        randomMoveTimer = 0f;
+        moveDirection = Vector3.zero;
+        isAIPaused = false;
 
         SetNewRandomDirection();
         SwitchState(MonsterState.Walk);
+
+        this.enabled = true;
     }
 
     void Update()
     {
-        // 1. Áß·Â Àû¿ë ¹× ÂøÁö º¸Á¤
+        if (isAIPaused)
+        {
+            if (!characterController.isGrounded)
+            {
+                moveDirection.y -= gravity * Time.deltaTime;
+                characterController.Move(moveDirection * Time.deltaTime);
+            }
+            return;
+        }
+
         if (!characterController.isGrounded)
         {
             moveDirection.y -= gravity * Time.deltaTime;
@@ -81,11 +106,8 @@ public class MonsterAI1 : MonoBehaviour
             moveDirection.y = -0.5f;
         }
 
-        // 2. »óÅÂ ÀüÈ¯ °¨Áö
         CheckForPlayerDetection();
 
-        // 3. ÇöÀç »óÅÂ¿¡ µû¸¥ ÀÌµ¿ º¤ÅÍ ¼³Á¤ ¹× ·ÎÅ×ÀÌ¼Ç Ã³¸®
-        // ¡Ú HandleWalkState¿Í HandleRunState¿¡¼­ °¢°¢ÀÇ ¼Óµµ(walkSpeed, runSpeed)¸¦ ¼³Á¤ÇÕ´Ï´Ù. ¡Ú
         switch (currentState)
         {
             case MonsterState.Walk:
@@ -96,36 +118,57 @@ public class MonsterAI1 : MonoBehaviour
                 break;
         }
 
-        // 4. CharacterController¸¦ »ç¿ëÇÏ¿© ÀÌµ¿ ½ÇÇà
         characterController.Move(moveDirection * Time.deltaTime);
     }
 
-    // --- »óÅÂ ÀüÈ¯ ---
+    // ëª¬ìŠ¤í„° ì¶©ëŒ ê°ì§€ ë¡œì§ (Is Trigger ì½œë¼ì´ë” í•„ìš”)
+    private void OnTriggerEnter(Collider other)
+    {
+        if (isAIPaused) return;
 
+        if (other.CompareTag(PLAYER_TAG))
+        {
+            isAIPaused = true;
+            moveDirection = Vector3.zero;
+
+            if (GameOverManager.Instance != null)
+            {
+                GameOverManager.Instance.StartCollisionGameOver();
+            }
+        }
+    }
+
+    // í”Œë ˆì´ì–´ì—ê²Œ ì¶”ì  ìƒíƒœë¥¼ í†µë³´
+    private void SendChaseStateToPlayer(bool isChasing)
+    {
+        if (playerController != null)
+        {
+            playerController.SetMonsterChaseState(isChasing);
+        }
+    }
+
+    // --- ìƒíƒœ ì „í™˜ ---
     private void SwitchState(MonsterState newState)
     {
-        if (currentState == newState)
-        {
-            return;
-        }
+        if (currentState == newState) return;
 
         MonsterState oldState = currentState;
         currentState = newState;
-        Debug.Log($"[AI] State Switched: {oldState} -> {newState}. Current Speed: {(newState == MonsterState.Run ? runSpeed : walkSpeed)}"); // »óÅÂ ÀüÈ¯ ¹× ¼Óµµ µğ¹ö±×
 
-        // ¾Ö´Ï¸ŞÀÌ¼Ç Æ®¸®°Å È£Ãâ
+        // PlayerControllerì— ì¶”ì  ìƒíƒœ í†µë³´
+        if (newState == MonsterState.Run && oldState != MonsterState.Run)
+        {
+            SendChaseStateToPlayer(true);
+        }
+        else if (newState == MonsterState.Walk && oldState == MonsterState.Run)
+        {
+            SendChaseStateToPlayer(false);
+        }
+
         if (animator != null)
         {
-            if (newState == MonsterState.Walk)
-            {
-                animator.SetTrigger(ANIM_WALK);
-                Debug.Log($"[ANIM] SetTrigger: {ANIM_WALK}");
-            }
-            else if (newState == MonsterState.Run)
-            {
-                animator.SetTrigger(ANIM_RUN);
-                Debug.Log($"[ANIM] SetTrigger: {ANIM_RUN}");
-            }
+            if (newState == MonsterState.Walk) { animator.SetTrigger(ANIM_WALK); }
+            else if (newState == MonsterState.Run) { animator.SetTrigger(ANIM_RUN); }
         }
 
         switch (currentState)
@@ -142,7 +185,6 @@ public class MonsterAI1 : MonoBehaviour
 
     private void HandleWalkState()
     {
-        // ¡Ú walkSpeed Àû¿ë ¡Ú
         Vector3 horizontalMove = currentRandomDirection * walkSpeed;
         moveDirection.x = horizontalMove.x;
         moveDirection.z = horizontalMove.z;
@@ -171,7 +213,6 @@ public class MonsterAI1 : MonoBehaviour
         directionToPlayer.y = 0;
         directionToPlayer.Normalize();
 
-        // ¡Ú runSpeed Àû¿ë ¡Ú
         Vector3 horizontalMove = directionToPlayer * runSpeed;
         moveDirection.x = horizontalMove.x;
         moveDirection.z = horizontalMove.z;
@@ -187,8 +228,6 @@ public class MonsterAI1 : MonoBehaviour
             transform.rotation = Quaternion.Slerp(transform.rotation, targetRotation, Time.deltaTime * rotationSpeed);
         }
     }
-
-    // --- °¨Áö ¹× »óÅÂ ÀüÈ¯ ·ÎÁ÷ ---
 
     private void CheckForPlayerDetection()
     {
@@ -220,7 +259,6 @@ public class MonsterAI1 : MonoBehaviour
         }
     }
 
-    // (IsPlayerVisible, OnControllerColliderHit, OnDrawGizmosSelected´Â ÀÌÀü°ú µ¿ÀÏ)
     private bool IsPlayerVisible()
     {
         if (playerTarget == null) return false;
@@ -236,14 +274,12 @@ public class MonsterAI1 : MonoBehaviour
         }
 
         RaycastHit hit;
-        // Raycast°¡ ÇÃ·¹ÀÌ¾î¿Í Àå¾Ö¹° ·¹ÀÌ¾î ¸ğµÎ¸¦ È®ÀÎÇØ¾ß ÇÏ¹Ç·Î, 
-        // ·¹ÀÌ¾î ¸¶½ºÅ©¸¦ obstacleLayer¸¸ »ç¿ëÇÏ°Å³ª, ÇÃ·¹ÀÌ¾î¸¦ Æ÷ÇÔÇÑ ¸ğµç °ÍÀ» È®ÀÎÇÏµµ·Ï ¼öÁ¤ÇÒ ¼ö ÀÖ½À´Ï´Ù.
-        // ÇöÀç´Â obstacleLayer¿¡ ºÎµúÇûÀ» ¶§ ÇÃ·¹ÀÌ¾î°¡ ¾Æ´Ï¸é ¸·Èù °ÍÀ¸·Î °£ÁÖÇÕ´Ï´Ù.
+
         if (Physics.Raycast(monsterPosition, rayDirection, out hit, detectionRadius, obstacleLayer))
         {
             if (!hit.transform.CompareTag(PLAYER_TAG))
             {
-                return false; // Àå¾Ö¹°¿¡ °¡·ÁÁü
+                return false; // ì¥ì• ë¬¼ì— ê°€ë ¤ì§
             }
             return true;
         }
@@ -251,7 +287,7 @@ public class MonsterAI1 : MonoBehaviour
         return true;
     }
 
-    // µğ¹ö±ëÀ» À§ÇÑ ½Ã°¢È­
+    // ë””ë²„ê¹…ì„ ìœ„í•œ ì‹œê°í™”
     private void OnDrawGizmosSelected()
     {
         Gizmos.color = Color.red;
