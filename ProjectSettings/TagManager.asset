@@ -8,6 +8,10 @@ TagManager:
   - Amondwater
   - Monster
   - AlmondWater
+  - WorkBench
+  - ExitZone
+  - Key
+  - Workbench
   layers:
   - Default
   - TransparentFX

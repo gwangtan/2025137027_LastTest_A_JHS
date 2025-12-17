@@ -2,11 +2,9 @@
 
 public class MonsterAI1 : MonoBehaviour
 {
-    // --- 몬스터 상태 정의 ---
     private enum MonsterState { Walk, Run }
     private MonsterState currentState = MonsterState.Walk;
 
-    // --- 기본 설정 변수 ---
     [Header("Movement Settings")]
     public float walkSpeed = 2f;
     public float runSpeed = 5f;
@@ -15,12 +13,17 @@ public class MonsterAI1 : MonoBehaviour
     public float gravity = 20.0f;
 
     [Header("Detection Settings")]
-    public float detectionRadius = 10f;
+    public float detectionRadius = 15f;
     public float lostSightTime = 3f;
-
     public LayerMask obstacleLayer;
 
-    // --- 내부 관리 변수 ---
+    [Header("Sound Settings")]
+    [SerializeField] private AudioSource audioSource;
+    [SerializeField] private AudioClip ambientSound;
+    [SerializeField] private AudioClip chaseSound;
+    public float soundDetectionMultiplier = 1.5f;
+    public float maxSoundVolume = 1.0f;
+
     private Transform playerTarget;
     private PlayerController playerController;
     private Vector3 currentRandomDirection;
@@ -29,125 +32,96 @@ public class MonsterAI1 : MonoBehaviour
     private Animator animator;
     private CharacterController characterController;
     private Vector3 moveDirection = Vector3.zero;
-
-    // ★★★ AI 일시 정지 상태 (게임 오버 시 움직임 방지) ★★★
     private bool isAIPaused = false;
 
     private const string PLAYER_TAG = "Player";
-    private const string ANIM_WALK = "Walk";
-    private const string ANIM_RUN = "Run";
 
     void Start()
     {
         characterController = GetComponent<CharacterController>();
-        if (characterController == null)
-        {
-            Debug.LogError("CharacterController 컴포넌트가 필요합니다!");
-            enabled = false;
-            return;
-        }
-
         GameObject playerObj = GameObject.FindGameObjectWithTag(PLAYER_TAG);
         if (playerObj != null)
         {
             playerTarget = playerObj.transform;
             playerController = playerObj.GetComponent<PlayerController>();
-            if (playerController == null)
-            {
-                Debug.LogError("Player 오브젝트에 PlayerController 컴포넌트가 없습니다!");
-            }
-        }
-        else
-        {
-            Debug.LogError("Player Tag를 가진 오브젝트를 씬에서 찾을 수 없습니다.");
         }
 
         animator = GetComponentInChildren<Animator>();
-        if (animator == null)
+
+        if (audioSource == null) audioSource = GetComponent<AudioSource>();
+        if (audioSource != null)
         {
-            Debug.LogError("[FATAL ERROR] Animator 컴포넌트가 이 오브젝트 또는 자식 오브젝트에 없습니다!");
+            audioSource.loop = true;
+            audioSource.playOnAwake = false;
+            audioSource.spatialBlend = 1.0f;
+            audioSource.rolloffMode = AudioRolloffMode.Linear;
+            audioSource.maxDistance = detectionRadius * soundDetectionMultiplier;
+            audioSource.minDistance = 2f;
         }
 
         ResetMonsterState();
     }
 
-    // 씬 로드 후 항상 초기 상태를 보장하는 함수
     private void ResetMonsterState()
     {
         detectionTimer = 0f;
         randomMoveTimer = 0f;
         moveDirection = Vector3.zero;
         isAIPaused = false;
-
         SetNewRandomDirection();
-        SwitchState(MonsterState.Walk);
 
+        currentState = MonsterState.Walk;
+        UpdateAnimation(MonsterState.Walk);
+
+        if (audioSource != null)
+        {
+            audioSource.clip = ambientSound;
+            audioSource.Stop();
+        }
         this.enabled = true;
     }
 
     void Update()
     {
-        if (isAIPaused)
-        {
-            if (!characterController.isGrounded)
-            {
-                moveDirection.y -= gravity * Time.deltaTime;
-                characterController.Move(moveDirection * Time.deltaTime);
-            }
-            return;
-        }
+        if (isAIPaused) { if (audioSource.isPlaying) audioSource.Stop(); HandleGravity(); return; }
 
-        if (!characterController.isGrounded)
-        {
-            moveDirection.y -= gravity * Time.deltaTime;
-        }
-        else
-        {
-            moveDirection.y = -0.5f;
-        }
-
+        HandleGravity();
         CheckForPlayerDetection();
+        HandleSoundControl(); // 매 프레임 거리 체크 및 사운드 관리
 
         switch (currentState)
         {
-            case MonsterState.Walk:
-                HandleWalkState();
-                break;
-            case MonsterState.Run:
-                HandleRunState();
-                break;
+            case MonsterState.Walk: HandleWalkState(); break;
+            case MonsterState.Run: HandleRunState(); break;
         }
 
         characterController.Move(moveDirection * Time.deltaTime);
     }
 
-    // 몬스터 충돌 감지 로직 (Is Trigger 콜라이더 필요)
-    private void OnTriggerEnter(Collider other)
+    private void HandleSoundControl()
     {
-        if (isAIPaused) return;
+        if (playerTarget == null || audioSource == null) return;
 
-        if (other.CompareTag(PLAYER_TAG))
+        float distance = Vector3.Distance(transform.position, playerTarget.position);
+        float soundRange = detectionRadius * soundDetectionMultiplier;
+
+        // 범위 내에 있을 때
+        if (distance <= soundRange)
         {
-            isAIPaused = true;
-            moveDirection = Vector3.zero;
-
-            if (GameOverManager.Instance != null)
+            if (!audioSource.isPlaying)
             {
-                GameOverManager.Instance.StartCollisionGameOver();
+                // 현재 상태에 맞는 클립이 설정되어 있는지 확인 후 재생
+                AudioClip targetClip = (currentState == MonsterState.Run) ? chaseSound : ambientSound;
+                if (audioSource.clip != targetClip) audioSource.clip = targetClip;
+                audioSource.Play();
             }
         }
-    }
-
-    // 플레이어에게 추적 상태를 통보
-    private void SendChaseStateToPlayer(bool isChasing)
-    {
-        if (playerController != null)
+        else
         {
-            playerController.SetMonsterChaseState(isChasing);
+            if (audioSource.isPlaying) audioSource.Stop();
         }
     }
 
-    // --- 상태 전환 ---
     private void SwitchState(MonsterState newState)
     {
         if (currentState == newState) return;
@@ -155,68 +129,71 @@ public class MonsterAI1 : MonoBehaviour
         MonsterState oldState = currentState;
         currentState = newState;
 
-        // PlayerController에 추적 상태 통보
-        if (newState == MonsterState.Run && oldState != MonsterState.Run)
-        {
-            SendChaseStateToPlayer(true);
-        }
-        else if (newState == MonsterState.Walk && oldState == MonsterState.Run)
-        {
-            SendChaseStateToPlayer(false);
-        }
+        // 1. 사운드 즉시 교체 및 재생
+        UpdateStateSound(newState);
 
-        if (animator != null)
-        {
-            if (newState == MonsterState.Walk) { animator.SetTrigger(ANIM_WALK); }
-            else if (newState == MonsterState.Run) { animator.SetTrigger(ANIM_RUN); }
-        }
+        // 2. 애니메이션 업데이트
+        UpdateAnimation(newState);
 
-        switch (currentState)
-        {
-            case MonsterState.Walk:
-                SetNewRandomDirection();
-                break;
+        // 3. 플레이어 컨트롤러에 상태 통보
+        if (newState == MonsterState.Run) playerController?.SetMonsterChaseState(true);
+        else if (oldState == MonsterState.Run) playerController?.SetMonsterChaseState(false);
 
-            case MonsterState.Run:
-                detectionTimer = 0f;
-                break;
+        if (currentState == MonsterState.Walk) SetNewRandomDirection();
+        else detectionTimer = 0f;
+    }
+
+    private void UpdateStateSound(MonsterState state)
+    {
+        if (audioSource == null) return;
+        AudioClip targetClip = (state == MonsterState.Run) ? chaseSound : ambientSound;
+
+        if (audioSource.clip != targetClip)
+        {
+            audioSource.clip = targetClip;
+            // 재생 중이었거나 범위 안이라면 즉시 새로운 클립으로 다시 재생
+            if (Vector3.Distance(transform.position, playerTarget.position) <= detectionRadius * soundDetectionMultiplier)
+            {
+                audioSource.Play();
+            }
         }
     }
 
+    private void UpdateAnimation(MonsterState state)
+    {
+        if (animator == null) return;
+
+        // Trigger 방식은 가끔 씹힐 수 있으므로 Bool 방식을 권장하지만, 
+        // 기존 애니메이터 설정에 맞춰 둘 다 실행되도록 안전하게 작성했습니다.
+        if (state == MonsterState.Walk)
+        {
+            animator.SetTrigger("Walk");
+            animator.SetBool("IsRunning", false);
+        }
+        else
+        {
+            animator.SetTrigger("Run");
+            animator.SetBool("IsRunning", true);
+        }
+    }
+
+    // --- 나머지 이동 관련 로직 (기존과 동일) ---
     private void HandleWalkState()
     {
         Vector3 horizontalMove = currentRandomDirection * walkSpeed;
-        moveDirection.x = horizontalMove.x;
-        moveDirection.z = horizontalMove.z;
-
+        moveDirection.x = horizontalMove.x; moveDirection.z = horizontalMove.z;
         RotateTowards(currentRandomDirection);
-
         randomMoveTimer -= Time.deltaTime;
-        if (randomMoveTimer <= 0f)
-        {
-            SetNewRandomDirection();
-        }
-    }
-
-    private void SetNewRandomDirection()
-    {
-        Vector3 newDirection = new Vector3(Random.Range(-1f, 1f), 0, Random.Range(-1f, 1f)).normalized;
-        currentRandomDirection = newDirection;
-        randomMoveTimer = Random.Range(randomMoveDuration * 0.5f, randomMoveDuration * 1.5f);
+        if (randomMoveTimer <= 0f) SetNewRandomDirection();
     }
 
     private void HandleRunState()
     {
         if (playerTarget == null) return;
-
         Vector3 directionToPlayer = (playerTarget.position - transform.position);
-        directionToPlayer.y = 0;
-        directionToPlayer.Normalize();
-
+        directionToPlayer.y = 0; directionToPlayer.Normalize();
         Vector3 horizontalMove = directionToPlayer * runSpeed;
-        moveDirection.x = horizontalMove.x;
-        moveDirection.z = horizontalMove.z;
-
+        moveDirection.x = horizontalMove.x; moveDirection.z = horizontalMove.z;
         RotateTowards(directionToPlayer);
     }
 
@@ -232,29 +209,15 @@ public class MonsterAI1 : MonoBehaviour
     private void CheckForPlayerDetection()
     {
         if (playerTarget == null) return;
-
-        bool isPlayerVisible = IsPlayerVisible();
-
-        if (currentState == MonsterState.Walk)
-        {
-            if (isPlayerVisible)
-            {
-                SwitchState(MonsterState.Run);
-            }
-        }
+        bool isVisible = IsPlayerVisible();
+        if (currentState == MonsterState.Walk && isVisible) SwitchState(MonsterState.Run);
         else if (currentState == MonsterState.Run)
         {
-            if (isPlayerVisible)
-            {
-                detectionTimer = 0f;
-            }
+            if (isVisible) detectionTimer = 0f;
             else
             {
                 detectionTimer += Time.deltaTime;
-                if (detectionTimer >= lostSightTime)
-                {
-                    SwitchState(MonsterState.Walk);
-                }
+                if (detectionTimer >= lostSightTime) SwitchState(MonsterState.Walk);
             }
         }
     }
@@ -262,51 +225,37 @@ public class MonsterAI1 : MonoBehaviour
     private bool IsPlayerVisible()
     {
         if (playerTarget == null) return false;
-
-        Vector3 monsterPosition = transform.position + Vector3.up * 0.5f;
-        Vector3 targetPosition = playerTarget.position + Vector3.up * 0.5f;
-        Vector3 rayDirection = (targetPosition - monsterPosition).normalized;
-        float distanceToPlayer = Vector3.Distance(monsterPosition, targetPosition);
-
-        if (distanceToPlayer > detectionRadius)
+        Vector3 monsterPos = transform.position + Vector3.up * 0.5f;
+        Vector3 targetPos = playerTarget.position + Vector3.up * 0.5f;
+        float dist = Vector3.Distance(monsterPos, targetPos);
+        if (dist > detectionRadius) return false;
+        if (Physics.Raycast(monsterPos, (targetPos - monsterPos).normalized, out RaycastHit hit, detectionRadius, obstacleLayer))
         {
-            return false;
+            return hit.transform.CompareTag(PLAYER_TAG);
         }
-
-        RaycastHit hit;
-
-        if (Physics.Raycast(monsterPosition, rayDirection, out hit, detectionRadius, obstacleLayer))
-        {
-            if (!hit.transform.CompareTag(PLAYER_TAG))
-            {
-                return false; // 장애물에 가려짐
-            }
-            return true;
-        }
-
         return true;
     }
 
-    // 디버깅을 위한 시각화
-    private void OnDrawGizmosSelected()
+    private void HandleGravity()
     {
-        Gizmos.color = Color.red;
-        Gizmos.DrawWireSphere(transform.position, detectionRadius);
+        if (!characterController.isGrounded) moveDirection.y -= gravity * Time.deltaTime;
+        else moveDirection.y = -0.5f;
+    }
 
-        if (playerTarget != null)
+    private void SetNewRandomDirection()
+    {
+        currentRandomDirection = new Vector3(Random.Range(-1f, 1f), 0, Random.Range(-1f, 1f)).normalized;
+        randomMoveTimer = Random.Range(randomMoveDuration * 0.5f, randomMoveDuration * 1.5f);
+    }
+
+    private void OnTriggerEnter(Collider other)
+    {
+        if (isAIPaused) return;
+        if (other.CompareTag(PLAYER_TAG))
         {
-            Vector3 rayDirection = (playerTarget.position - transform.position).normalized;
-            Vector3 startPosition = transform.position + Vector3.up * 0.5f;
-
-            if (IsPlayerVisible())
-            {
-                Gizmos.color = Color.green;
-            }
-            else
-            {
-                Gizmos.color = Color.yellow;
-            }
-            Gizmos.DrawRay(startPosition, rayDirection * detectionRadius);
+            isAIPaused = true; moveDirection = Vector3.zero;
+            if (audioSource != null) audioSource.Stop();
+            if (GameOverManager.Instance != null) GameOverManager.Instance.StartCollisionGameOver();
         }
     }
 }

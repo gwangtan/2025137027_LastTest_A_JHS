@@ -1,199 +1,113 @@
 using UnityEngine;
-using UnityEngine.AI;
 
 public class MonsterAI : MonoBehaviour
 {
-    // ====== AI 상태 정의 ======
-    public enum AIState { Patrol, Chase }
-    public AIState currentState = AIState.Patrol;
+    public float walkSpeed = 2f;
+    public float runSpeed = 5.5f;
+    public float detectionRadius = 15f;
+    public LayerMask obstacleLayer;
 
-    // ====== Inspector에서 설정 가능한 변수 ======
-    [Header("Movement Settings")]
-    public float walkSpeed = 2.0f; // 순찰 상태의 속도
-    public float runSpeed = 5.0f;  // 추적 상태의 속도
+    [SerializeField] private AudioSource audioSource;
+    [SerializeField] private AudioClip ambientSound, chaseSound;
+    [SerializeField] private Animator animator; // ★ 몬스터 애니메이터 연결
 
-    [Header("Detection Settings")]
-    public float sightRange = 15.0f;     // 플레이어를 감지하는 시야 범위
-    public float loseTargetTime = 3.0f;  // 플레이어를 놓쳤을 때 추적을 포기할 시간 (요청 사항)
-    public LayerMask obstacleMask;       // 벽과 같은 장애물 레이어 (Inspector에서 설정)
-
-    [Header("Patrol Settings")]
-    public float patrolRange = 20.0f; // 랜덤 순찰 목표 지점의 최대 반경
-
-    // ====== 내부 변수 ======
-    private NavMeshAgent agent;
-    private Animator anim;
     private Transform player;
+    private PlayerController playerCtrl;
+    private bool isChasing = false;
 
-    private float targetLostTimer;
-    private Vector3 lastKnownPlayerPosition; // 플레이어를 마지막으로 본 위치
-
-    private void Start()
+    void Start()
     {
-        // 필수 컴포넌트 가져오기
-        agent = GetComponent<NavMeshAgent>();
-        anim = GetComponent<Animator>();
+        player = GameObject.FindWithTag("Player").transform;
+        if (player != null) playerCtrl = player.GetComponent<PlayerController>();
 
-        // 플레이어 오브젝트 찾기 (태그 사용)
-        GameObject playerObj = GameObject.FindGameObjectWithTag("Player");
-        if (playerObj != null)
+        if (animator == null) animator = GetComponentInChildren<Animator>(); // 자동 할당 시도
+
+        if (audioSource)
         {
-            player = playerObj.transform;
+            audioSource.loop = true;
+            audioSource.maxDistance = detectionRadius * 1.5f;
+            audioSource.spatialBlend = 1.0f;
+        }
+    }
+
+    void Update()
+    {
+        float dist = Vector3.Distance(transform.position, player.position);
+
+        // 사운드 볼륨 조절
+        if (audioSource) audioSource.volume = Mathf.InverseLerp(detectionRadius * 2, 0, dist);
+
+        bool canSee = IsPlayerInSight(dist);
+
+        // 상태 전환
+        if (canSee && !isChasing) StartChase();
+        else if (!canSee && isChasing) StopChase();
+
+        // 이동 및 애니메이션 처리
+        if (isChasing)
+        {
+            MoveTowards(runSpeed);
+            UpdateAnimation(true); // ★ 추격 중 (Run)
         }
         else
         {
-            Debug.LogError("Player 오브젝트에 'Player' 태그가 지정되지 않았습니다.");
-        }
-
-        targetLostTimer = loseTargetTime;
-        SetState(AIState.Patrol); // 시작은 순찰 상태
-    }
-
-    private void Update()
-    {
-        if (player == null) return;
-
-        // 매 프레임 플레이어 감지 여부를 확인
-        bool isPlayerInSight = CheckForPlayer();
-
-        // 상태 기계 업데이트
-        switch (currentState)
-        {
-            case AIState.Patrol:
-                PatrolState(isPlayerInSight);
-                break;
-            case AIState.Chase:
-                ChaseState(isPlayerInSight);
-                break;
+            Patrol();
+            UpdateAnimation(false); // ★ 순찰 중 (Walk/Idle)
         }
     }
 
-    /// <summary>
-    /// AI 상태를 설정하고, 해당 상태에 맞는 초기 설정을 수행합니다.
-    /// </summary>
-    private void SetState(AIState newState)
+    // ★ 몬스터 애니메이션 파라미터 업데이트
+    void UpdateAnimation(bool chasing)
     {
-        currentState = newState;
+        if (animator == null) return;
 
-        switch (currentState)
-        {
-            case AIState.Patrol:
-                agent.speed = walkSpeed;
-                anim.SetBool("IsRunning", false);
-                anim.SetBool("IsWalking", true);
-                SetNewPatrolPoint(); // 순찰 시작 시 목표 지점 설정
-                break;
-
-            case AIState.Chase:
-                agent.speed = runSpeed;
-                anim.SetBool("IsWalking", false);
-                anim.SetBool("IsRunning", true);
-                targetLostTimer = loseTargetTime; // 추적 시작 시 타이머 초기화
-                break;
-        }
+        // IsRunning 파라미터를 통해 Run/Walk 전환
+        // Speed 파라미터를 통해 블렌드 트리 제어도 가능하도록 구성
+        animator.SetBool("IsRunning", chasing);
+        animator.SetFloat("Speed", chasing ? runSpeed : walkSpeed);
     }
 
-    // ====================================================================
-    // 1. 플레이어 감지 로직
-    // ====================================================================
-
-    /// <summary>
-    /// 플레이어가 시야 범위 내에 있고, 장애물에 가려지지 않았는지 확인합니다.
-    /// </summary>
-    bool CheckForPlayer()
+    bool IsPlayerInSight(float dist)
     {
-        float distanceToPlayer = Vector3.Distance(transform.position, player.position);
-
-        // 1. 시야 범위 확인
-        if (distanceToPlayer <= sightRange)
+        if (dist > detectionRadius) return false;
+        RaycastHit hit;
+        Vector3 dir = (player.position - transform.position).normalized;
+        if (Physics.Raycast(transform.position + Vector3.up, dir, out hit, detectionRadius, obstacleLayer))
         {
-            // 2. Linecast를 사용하여 벽/장애물 확인
-            // 몬스터의 눈높이에서 플레이어의 눈높이로 레이캐스트 (정확도를 위해 Y축을 조정할 수 있음)
-            Vector3 startPos = transform.position + Vector3.up * 0.5f;
-            Vector3 endPos = player.position + Vector3.up * 0.5f;
-
-            RaycastHit hit;
-
-            // obstacleMask 레이어만 충돌 검사
-            if (Physics.Linecast(startPos, endPos, out hit, obstacleMask))
-            {
-                // 장애물에 맞았으므로, 플레이어가 보이지 않음
-                return false;
-            }
-            else
-            {
-                // 장애물에 막히지 않았으므로, 플레이어가 보임
-                lastKnownPlayerPosition = player.position;
-                return true;
-            }
+            return hit.transform.CompareTag("Player");
         }
         return false;
     }
 
-    // ====================================================================
-    // 2. Patrol State (순찰 상태)
-    // ====================================================================
-
-    private void PatrolState(bool isPlayerInSight)
+    void StartChase()
     {
-        // 1. 감지: 플레이어가 보이면 추적 상태로 전환
-        if (isPlayerInSight)
-        {
-            SetState(AIState.Chase);
-            return;
-        }
-
-        // 2. 이동: 현재 목표 지점에 도착했으면 새 목표 설정
-        // pathPending: 경로 계산 중인지 확인
-        // remainingDistance: 목표 지점까지 남은 거리
-        if (!agent.pathPending && agent.remainingDistance < 1.0f)
-        {
-            SetNewPatrolPoint();
-        }
+        isChasing = true;
+        if (audioSource) { audioSource.clip = chaseSound; audioSource.Play(); }
+        if (playerCtrl) playerCtrl.SetMonsterChaseState(true);
     }
 
-    /// <summary>
-    /// 현재 위치 주변의 랜덤한 내비게이션 가능한 지점을 찾습니다.
-    /// </summary>
-    private void SetNewPatrolPoint()
+    void StopChase()
     {
-        Vector3 randomDirection = Random.insideUnitSphere * patrolRange;
-        randomDirection += transform.position;
-        NavMeshHit hit;
-
-        // NavMesh 상의 유효한 지점을 찾습니다. (patrolRange 내에서)
-        if (NavMesh.SamplePosition(randomDirection, out hit, patrolRange, NavMesh.AllAreas))
-        {
-            agent.SetDestination(hit.position);
-        }
+        isChasing = false;
+        if (audioSource) { audioSource.clip = ambientSound; audioSource.Play(); }
+        if (playerCtrl) playerCtrl.SetMonsterChaseState(false);
     }
 
-    // ====================================================================
-    // 3. Chase State (추적 상태)
-    // ====================================================================
-
-    private void ChaseState(bool isPlayerInSight)
+    void MoveTowards(float speed)
     {
-        // 1. 계속 감지: 플레이어가 시야 내에 있는 경우
-        if (isPlayerInSight)
-        {
-            agent.SetDestination(player.position); // 플레이어 위치로 이동
-            targetLostTimer = loseTargetTime;     // 타이머 초기화
-        }
-        // 2. 놓침: 플레이어가 시야에서 사라진 경우
-        else
-        {
-            // 마지막으로 본 위치로 이동을 계속 시도
-            agent.SetDestination(lastKnownPlayerPosition);
+        transform.position = Vector3.MoveTowards(transform.position, player.position, speed * Time.deltaTime);
+        // 플레이어를 바라보게 회전
+        Vector3 targetDir = new Vector3(player.position.x, transform.position.y, player.position.z);
+        transform.LookAt(targetDir);
+    }
 
-            // 타이머 감소
-            targetLostTimer -= Time.deltaTime;
+    void Patrol()
+    {
+        // 간단한 배회 로직 (필요 시 추가)
+    }
 
-            // 3초 이상 놓쳤거나, 마지막 위치에 도착한 경우
-            if (targetLostTimer <= 0f || (!agent.pathPending && agent.remainingDistance < 1.0f))
-            {
-                SetState(AIState.Patrol); // 순찰 상태로 복귀
-            }
-        }
+    private void OnTriggerEnter(Collider other)
+    {
+        if (other.CompareTag("Player")) GameOverManager.Instance.StartCollisionGameOver();
     }
 }
